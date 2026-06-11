@@ -1,0 +1,150 @@
+---
+title: "fibroblast_signatures_aois"
+output: html_document
+date: "2026-05-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+
+library(Seurat)
+library(UCell)
+library(ggplot2)
+library(ggpubr) # Optional: for adding p-values to plots
+library(dplyr)
+
+```
+
+
+```{r pressure, echo=FALSE}
+# 1. Read files
+fibr_gene_expression_modified <- read.csv("/Users/nikamikhailava/Desktop/Lab_stuff/batch_merged_new/fibroblasts_gene_expression_data_new_batch_three_merged_transposed.csv", check.names = FALSE)
+cell_proportions <- read.csv("/Users/nikamikhailava/Desktop/Lab_stuff/batch_merged_new/bp_res_mid_lvl_ct_updated_ct_fraction_batch_3.csv", check.names = FALSE)
+
+fibr_gene_expression_modified_genes<-fibr_gene_expression_modified
+
+# 2. Merge using dplyr (very similar to pd.merge)
+fibr_gene_expression_modified <- inner_join(
+  fibr_gene_expression_modified, 
+  cell_proportions, 
+  by = "dcc_filename"
+)
+# Note: You can easily swap inner_join() with left_join(), right_join(), or full_join()
+
+# 3. Read signature genes
+signature_genes <- read.csv("/Users/nikamikhailava/Desktop/Fibroblasts_signature_derivation/stroma_vs_tsi_top100_variable_genes_pre_post.csv", sep = ";", row.names = 1, check.names = FALSE)
+```
+
+
+
+```{r pressure, echo=FALSE}
+fibr_gene_expression_modified
+```
+
+
+```{r pressure, echo=FALSE}
+signature_genes
+
+```
+```{r}
+# fibroblast_signatures <- list(
+#  TSI_Signature = c(
+#     "FN1", "COL1A1", "IFI6", "COL3A1", "ISG15", 
+#     "POSTN", "MMP11", "THBS1", "TIMP3", "COL11A1", 
+#     "MZT2B", "DUSP1", "RSAD2", "SFRP4", "APOE"
+#   )
+# )
+
+fibroblast_signatures <- list(
+ TSI_Signatures = c(
+    "FN1", "COL1A1", "IFI6", "COL3A1", "ISG15", 
+    "POSTN", "MMP11", "THBS1", "TIMP3", "COL11A1" 
+  )
+)
+
+# 1. Move the dcc_filenames column to the row names
+rownames(fibr_gene_expression_modified_genes) <- fibr_gene_expression_modified_genes[, 1]
+
+# 2. Remove that first column so the data frame is 100% numeric
+fibr_gene_expression_modified_genes <- fibr_gene_expression_modified_genes[, -1]
+
+# 3. Transpose the data frame so GENES are rows and DCC_FILENAMES are columns
+expr_matrix_transposed <- t(fibr_gene_expression_modified_genes)
+
+# 4. Now run the UCell scoring on the transposed numeric matrix
+ucell_scores <- ScoreSignatures_UCell(
+  matrix = expr_matrix_transposed, 
+  features = fibroblast_signatures
+)
+
+ucell_df <- as.data.frame(ucell_scores)
+ucell_df$dcc_filename<-rownames(ucell_df)
+scores_per_aoi<-inner_join(
+  ucell_df, 
+  cell_proportions, 
+  by = "dcc_filename"
+)
+# 5. Filter Data: Keep only Stroma segments
+stroma_data <- scores_per_aoi %>%
+  filter(Segment == "stroma")
+write.csv(stroma_data, "ucell_tsi_scores_per_aoi_pre_post.csv", row.names = FALSE)
+# ==========================================
+# 6. VIOLIN / BOXPLOT
+# ==========================================
+# Plotting based ONLY on stroma_data, grouping/coloring by segment_geomx
+p_violin <- ggplot(stroma_data, aes(x = Segment_geomx, y = TSI_Signatures_UCell, fill = Segment_geomx)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  geom_boxplot(width = 0.2, fill = "white", color = "black", outlier.shape = NA) +
+  theme_classic() +
+  labs(
+    title = "TSI Signature Activity in Stroma",
+    x = "GeoMx Segment",
+    y = "UCell Score"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + # Angles text if segment names are long
+  stat_compare_means() # Automatically uses Wilcoxon (if 2 groups) or Kruskal-Wallis (if >2)
+
+p_violin
+
+# ==========================================
+# 7. HEATMAP
+# ==========================================
+# Ensure we only try to plot signature genes that actually exist in your matrix
+available_genes <- intersect(fibroblast_signatures$TSI_Signature, colnames(fibr_gene_expression_modified_genes))
+
+# Extract the stroma AOI filenames to subset the columns
+stroma_aois <- stroma_data$dcc_filename
+
+# Create a subset matrix: Rows = Signature Genes, Columns = Stroma AOIs
+heatmap_matrix <- as.matrix(fibr_gene_expression_modified_genes[available_genes, stroma_aois])
+
+# Create an annotation dataframe to show the segment_geomx colors on top of the heatmap
+annotation_col <- data.frame(
+  segment_geomx = stroma_data$segment_geomx
+)
+rownames(annotation_col) <- stroma_data$dcc_filename
+
+# Generate the Heatmap
+pheatmap(
+  heatmap_matrix,
+  scale = "row",               # Converts raw expression to Z-scores across rows for visualization
+  annotation_col = annotation_col,
+  show_colnames = FALSE,       # Set to TRUE if you want to see the individual dcc_filenames
+  main = "TSI Signature Gene Expression in Stroma"
+)
+
+```
+
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
